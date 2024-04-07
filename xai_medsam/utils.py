@@ -1,4 +1,5 @@
 # stdlib
+import glob
 import math
 from typing import List
 
@@ -26,7 +27,7 @@ def extract_attention_layers(data: np.lib.npyio.NpzFile) -> List[np.ndarray]:
     return attention_layers
 
 
-def build_attention_maps(attention_layers: List[np.ndarray]):
+def build_attention_maps(attention_layers: List[np.ndarray]) -> plt.figure.Figure:
     """
     Function to build a single plot of attention
     maps
@@ -71,5 +72,44 @@ def build_attention_maps(attention_layers: List[np.ndarray]):
 
     fig.tight_layout()
     plt.show()
+
+    return fig
+
+
+def plot_segmentation_masks(modality_type: str = 'CT') -> plt.figure.Figure:
+    """
+    Utility function that will plot the segmentation masks
+    for different modality types
+
+    TODO: So far this has only been tested on the CT outputs
+    from the MedSAM model
+    """
+    files_lookup = f'/panfs/jay/groups/7/csci5980/senge050/Project/dataset/validation/segs/*{modality_type}*'  # noqa
+    files = np.array(glob.glob(files_lookup))
+
+    # We will look at 15 random segmentation masks
+    files = np.random.choice(files, 15)
+
+    # first lets plot the segments
+    fig, axes = plt.subplots(3, 5, figsize=(10, 6), constrained_layout=True)
+    axes = axes.flatten()
+
+    for ax, file in zip(axes, files):
+        # Get the segments
+        data = np.load(file)
+        segment = data['segs']
+
+        # TODO: While looking at the CT scans I noticed that most of the segs
+        # have dimension (H, W), however there are some with (C, H, W)
+        # This will take the mean along the C dimension but we should try to understand
+        # more in depth why these outputs occur
+        if len(segment.shape) == 3:
+            segment = np.mean(segment, axis=0)
+
+        # Plot the data
+        ax.imshow(segment, aspect='auto')
+        ax.axis('off')
+
+    fig.suptitle('CT Scan Segmentation Masks')
 
     return fig
