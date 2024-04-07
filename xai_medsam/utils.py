@@ -26,7 +26,7 @@ def extract_attention_layers(data: np.lib.npyio.NpzFile) -> List[np.ndarray]:
     return attention_layers
 
 
-def build_attention_maps(attention_layers):
+def build_attention_maps(attention_layers: List[np.ndarray]):
     """
     Function to build a single plot of attention
     maps
@@ -71,3 +71,5 @@ def build_attention_maps(attention_layers):
 
     fig.tight_layout()
     plt.show()
+
+    return fig
