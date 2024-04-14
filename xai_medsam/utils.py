@@ -137,8 +137,8 @@ def pad_image(image, target_size=256):
     """
     # Pad
     h, w = image.shape[0], image.shape[1]
-    padh = np.max(0, target_size - h)
-    padw = np.max(0, target_size - w)
+    padh = max(0, target_size - h)
+    padw = max(0, target_size - w)
     if len(image.shape) == 3:  # Pad image
         image_padded = np.pad(image, ((0, padh), (0, padw), (0, 0)))
     else:  # Pad gt mask
