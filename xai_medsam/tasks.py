@@ -80,7 +80,7 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device):
     assert (
         np.max(img_3c) < 256
     ), f'input data should be in range [0, 255], but got {np.unique(img_3c)}'  # noqa
-    H, W = img_3c.shape[:2]
+    H, W, _ = img_3c.shape
     boxes = npz_data['boxes']
     segs = np.zeros(img_3c.shape[:2], dtype=np.uint8)
 
