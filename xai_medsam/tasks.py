@@ -6,10 +6,8 @@ import os
 import numpy as np
 import torch
 import tqdm
+from skimage import transform
 from torchvision.ops import masks_to_boxes
-
-# first party
-from xai_medsam.utils import pad_image, resize_box_to_256, resize_longest_side
 
 # Training data path
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
@@ -82,23 +80,30 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device):
     ), f'input data should be in range [0, 255], but got {np.unique(img_3c)}'  # noqa
     H, W, _ = img_3c.shape
     boxes = npz_data['boxes']
-    segs = np.zeros(img_3c.shape[:2], dtype=np.uint8)
+    segs = np.zeros((H, W), dtype=np.uint8)
 
     # preprocessing
-    img_256 = resize_longest_side(img_3c, 256)
-    newh, neww = img_256.shape[:2]
+    target_size = 256
+    img_256 = transform.resize(
+        img_3c,
+        (target_size, target_size),
+        order=3,
+        preserve_range=True,
+        anti_aliasing=True,
+    ).astype(np.uint8)
+
+    newh, neww, _ = img_256.shape
     img_256_norm = (img_256 - img_256.min()) / np.clip(
         img_256.max() - img_256.min(), a_min=1e-8, a_max=None
     )
-    img_256_padded = pad_image(img_256_norm, 256)
     img_256_tensor = (
-        torch.tensor(img_256_padded).float().permute(2, 0, 1).unsqueeze(0).to(device)
+        torch.tensor(img_256_norm).float().permute(2, 0, 1).unsqueeze(0).to(device)
     )
     with torch.no_grad():
         image_embedding = medsam_lite_model.image_encoder(img_256_tensor)
 
     for idx, box in enumerate(boxes, start=1):
-        box256 = resize_box_to_256(box, original_size=(H, W))
+        box256 = box / np.array([W, H, W, H]) * target_size
         box256 = box256[None, ...]  # (1, 4)
         medsam_mask, iou_pred = medsam_inference(
             medsam_lite_model, image_embedding, box256, (newh, neww), (H, W)
