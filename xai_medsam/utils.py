@@ -28,7 +28,7 @@ def extract_attention_layers(data: np.lib.npyio.NpzFile) -> List[np.ndarray]:
     return attention_layers
 
 
-def build_attention_maps(attention_layers: List[np.ndarray]) -> plt.figure.Figure:
+def build_attention_maps(attention_layers: List[np.ndarray]):
     """
     Function to build a single plot of attention
     maps
@@ -77,7 +77,7 @@ def build_attention_maps(attention_layers: List[np.ndarray]) -> plt.figure.Figur
     return fig
 
 
-def plot_segmentation_masks(modality_type: str = 'CT') -> plt.figure.Figure:
+def plot_segmentation_masks(modality_type: str = 'CT'):
     """
     Utility function that will plot the segmentation masks
     for different modality types
