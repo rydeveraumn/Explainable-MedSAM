@@ -83,6 +83,8 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device):
     segs = np.zeros((H, W), dtype=np.uint8)
 
     # preprocessing
+    # This comes from the tutorial and seems to yield better results
+    # for the bounding box resize
     target_size = 256
     img_256 = transform.resize(
         img_3c,
