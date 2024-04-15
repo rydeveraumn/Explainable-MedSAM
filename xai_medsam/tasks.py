@@ -1,17 +1,25 @@
 # stdlib
 import glob
 import os
+from typing import List
 
 # third party
 import numpy as np
 import torch
 import tqdm
+from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from skimage import transform
 from torchvision.ops import masks_to_boxes
 
+# first party
+from tiny_vit_sam import TinyViT
+from xai_medsam.models import MedSAM_Lite
+
 # Training data path
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
-SAVE_DATA_PATH = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation'  # noqa
+VALIDATION_DATA_PATH = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation'  # noqa
+SAVE_DATA_PATH = VALIDATION_DATA_PATH  # noqa
+PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-medsam-lite-segs/'  # noqa
 
 # Modalities in the training data
 MODALITIES = [
@@ -172,3 +180,97 @@ def build_validation_data_from_train() -> None:
             # Save the data
             file_save_path = os.path.join(SAVE_DATA_PATH, f'{modality}-{idx}.npz')
             np.savez(file_save_path, imgs=img, gts=mask, boxes=boxes)
+
+
+def run_inference() -> None:
+    """
+    Task to run inference on validation images. This will save the
+    segmentation masks so we can compute metrics.
+
+    TODO: Add Corey's attention extraction
+    """
+    # Set seeds
+    torch.set_float32_matmul_precision('high')
+    torch.manual_seed(2024)
+    torch.cuda.manual_seed(2024)
+    np.random.seed(2024)
+
+    # Device will be cpu
+    device = torch.device('cpu')
+
+    # Set up the image MedSAM image encoder
+    medsam_lite_image_encoder = TinyViT(
+        img_size=256,
+        in_chans=3,
+        embed_dims=[
+            64,  # (64, 256, 256)
+            128,  # (128, 128, 128)
+            160,  # (160, 64, 64)
+            320,  # (320, 64, 64)
+        ],
+        depths=[2, 2, 6, 2],
+        num_heads=[2, 4, 5, 10],
+        window_sizes=[7, 7, 14, 7],
+        mlp_ratio=4.0,
+        drop_rate=0.0,
+        drop_path_rate=0.0,
+        use_checkpoint=False,
+        mbconv_expand_ratio=4.0,
+        local_conv_size=3,
+        layer_lr_decay=0.8,
+    )
+
+    # Set up the prompt encoder
+    medsam_lite_prompt_encoder = PromptEncoder(
+        embed_dim=256,
+        image_embedding_size=(64, 64),
+        input_image_size=(256, 256),
+        mask_in_chans=16,
+    )
+
+    # Set up the mask encoder
+    medsam_lite_mask_decoder = MaskDecoder(
+        num_multimask_outputs=3,
+        transformer=TwoWayTransformer(
+            depth=2,
+            embedding_dim=256,
+            mlp_dim=2048,
+            num_heads=8,
+        ),
+        transformer_dim=256,
+        iou_head_depth=3,
+        iou_head_hidden_dim=256,
+    )
+
+    medsam_lite_model = MedSAM_Lite(
+        image_encoder=medsam_lite_image_encoder,
+        mask_decoder=medsam_lite_mask_decoder,
+        prompt_encoder=medsam_lite_prompt_encoder,
+    )
+
+    # For this code the model path will be fixed
+    lite_medsam_checkpoint = torch.load(
+        '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/lite_medsam.pth',
+        map_location='cpu',
+    )
+    medsam_lite_model.load_state_dict(lite_medsam_checkpoint)
+    medsam_lite_model.to(device)
+    medsam_lite_model.eval()
+
+    # Iterate over the saved data
+    validation_files = glob.glob(os.path.join(VALIDATION_DATA_PATH, '*'))
+
+    # Run the inference for all validation data
+    exceptions_list: List[str] = []
+    for img_npz_file in tqdm.tqdm(validation_files):
+        try:
+            MedSAM_infer_npz_2D(
+                img_npz_file=img_npz_file,
+                pred_save_dir=PRED_SAVE_DIR,
+                medsam_lite_model=medsam_lite_model,
+                device=device,
+            )
+
+        except Exception as e:
+            print(e)
+            exceptions_list.append(img_npz_file)
