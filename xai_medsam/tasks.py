@@ -4,6 +4,7 @@ import os
 from typing import List
 
 # third party
+import click
 import numpy as np
 import torch
 import tqdm
@@ -41,6 +42,12 @@ MODALITIES = [
     'US',
     'XRay',
 ]
+
+
+# Add click group for cli commands
+@click.group()
+def cli():  # noqa
+    pass
 
 
 # Override the forward pass for the attention mechanisms
@@ -218,6 +225,7 @@ def build_validation_data_from_train() -> None:
             np.savez(file_save_path, imgs=img, gts=mask, boxes=boxes)
 
 
+@cli.command('run-inference')
 def run_inference() -> None:
     """
     Task to run inference on validation images. This will save the
@@ -310,3 +318,8 @@ def run_inference() -> None:
         except Exception as e:
             print(e)
             exceptions_list.append(img_npz_file)
+
+
+if __name__ == "__main__":
+    # Be able to run different commands
+    cli()
