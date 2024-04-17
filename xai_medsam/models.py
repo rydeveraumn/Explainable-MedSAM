@@ -41,6 +41,20 @@ class MedSAM_Lite(nn.Module):
     def postprocess_masks(self, masks, new_size, original_size):
         """
         Do cropping and resizing
+
+        Parameters
+        ----------
+        masks : torch.Tensor
+            masks predicted by the model
+        new_size : tuple
+            the shape of the image after resizing to the longest side of 256
+        original_size : tuple
+            the original shape of the image
+
+        Returns
+        -------
+        torch.Tensor
+            the upsampled mask to the original size
         """
         # Crop
         masks = masks[..., : new_size[0], : new_size[1]]

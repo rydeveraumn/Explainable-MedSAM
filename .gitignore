@@ -2,3 +2,5 @@
 datasets/*
 notebooks/*
 .DS_Store
+*.egg-info/*
+*.pyc

@@ -14,6 +14,9 @@ from torchvision.ops import masks_to_boxes
 # first party
 from tiny_vit_sam import TinyViT
 from xai_medsam.models import MedSAM_Lite
+from tiny_vit_sam import Attention as ViTAttention
+from segment_anything.modeling.transformer import Attention as SamAttention
+from matplotlib import pyplot as plt
 
 # Training data path
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
@@ -78,9 +81,57 @@ def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
 
     return medsam_seg, iou
 
+def get_attns(module, prefix=''):
+    attns = {}
+    for name, m in module.named_modules():
+        if isinstance(m, SamAttention) or isinstance(m, ViTAttention):
+            attns[prefix + name] = m.attention_map.cpu().numpy().astype(np.half)
+    return attns
 
-def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device):
-    npz_name = img_npz_file.split('/')[-1]
+
+def show_mask(mask, ax, mask_color=None, alpha=0.5):
+    """
+    show mask on the image
+
+    Parameters
+    ----------
+    mask : numpy.ndarray
+        mask of the image
+    ax : matplotlib.axes.Axes
+        axes to plot the mask
+    mask_color : numpy.ndarray
+        color of the mask
+    alpha : float
+        transparency of the mask
+    """
+    if mask_color is not None:
+        color = np.concatenate([mask_color, np.array([alpha])], axis=0)
+    else:
+        color = np.array([251/255, 252/255, 30/255, alpha])
+    h, w = mask.shape[-2:]
+    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+    ax.imshow(mask_image)
+
+
+def show_box(box, ax, edgecolor='blue'):
+    """
+    show bounding box on the image
+
+    Parameters
+    ----------
+    box : numpy.ndarray
+        bounding box coordinates in the original image
+    ax : matplotlib.axes.Axes
+        axes to plot the bounding box
+    edgecolor : str
+        color of the bounding box
+    """
+    x0, y0 = box[0], box[1]
+    w, h = box[2] - box[0], box[3] - box[1]
+    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor=edgecolor, facecolor=(0,0,0,0), lw=2)) 
+
+def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device, attention=False, save_overlay=False, png_save_dir='./'):
+    npz_name = os.path.basename(img_npz_file)
     npz_data = np.load(img_npz_file, 'r', allow_pickle=True)  # (H, W, 3)
     img_3c = npz_data['imgs']  # (H, W, 3)
     assert (
@@ -109,8 +160,10 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device):
     img_256_tensor = (
         torch.tensor(img_256_norm).float().permute(2, 0, 1).unsqueeze(0).to(device)
     )
+    attns = {}
     with torch.no_grad():
         image_embedding = medsam_lite_model.image_encoder(img_256_tensor)
+        attns.update(get_attns(medsam_lite_model.image_encoder))
 
     for idx, box in enumerate(boxes, start=1):
         box256 = box / np.array([W, H, W, H]) * target_size
@@ -122,10 +175,32 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device):
         # print(f'{npz_name}, box: {box},
         # predicted iou: {np.round(iou_pred.item(), 4)}')
 
+    to_save = {
+        'segs': segs,
+        **(attns if attention else {})
+    }
     np.savez_compressed(
         os.path.join(pred_save_dir, npz_name),
-        segs=segs,
+        **to_save,
     )
+    if save_overlay:
+        fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+        ax[0].imshow(img_3c)
+        ax[1].imshow(img_3c)
+        ax[0].set_title("Image")
+        ax[1].set_title("LiteMedSAM Segmentation")
+        ax[0].axis('off')
+        ax[1].axis('off')
+
+        for i, box in enumerate(boxes):
+            color = np.random.rand(3)
+            box_viz = box
+            show_box(box_viz, ax[1], edgecolor=color)
+            show_mask((segs == i+1).astype(np.uint8), ax[1], mask_color=color)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(png_save_dir, npz_name.split(".")[0] + '.png'), dpi=300)
+        plt.close()
 
 
 def build_validation_data_from_train() -> None:

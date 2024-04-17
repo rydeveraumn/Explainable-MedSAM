@@ -4,7 +4,8 @@ import math
 # third party
 import torch
 from torch import Tensor
-
+from tiny_vit_sam import Attention as ViTAttention
+from segment_anything.modeling.transformer import Attention as SamAttention
 
 def ViTAttention_forward_override(self, x):
     """
@@ -68,3 +69,11 @@ def SamAttention_forward_override(self, q: Tensor, k: Tensor, v: Tensor) -> Tens
     out = self.out_proj(out)
 
     return out
+
+def apply_overrides():
+    """
+    Apply the overrides to the Attention mechanisms
+    """
+    ViTAttention.forward = ViTAttention_forward_override
+    SamAttention.forward = SamAttention_forward_override
+    print("Overridden the forward functions for ViT and Sam Attention mechanisms.")
