@@ -6,6 +6,6 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=dever120@umn.edu
 #SBATCH -p apollo_agate
-cd /home/jusun/dever120/HMS-Harmful-Brain-Activity-Classification
-export PATH=/home/jusun/dever120/miniconda3/envs/kaggle/bin:$PATH
-python -m tasks run-model-training-progressive-resizing-task-v1
+cd /home/csci5980/dever120/Explainable-MedSam
+export PATH=/home/csci5980/dever120/miniconda3/envs/medsam/bin:$PATH
+python -m xai_medsam.tasks run-inference
