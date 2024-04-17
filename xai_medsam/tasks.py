@@ -115,7 +115,7 @@ def get_attns(module, prefix=''):
 
 
 def MedSAM_infer_npz_2D(
-    img_npz_file, pred_save_dir, medsam_lite_model, device, attention=False
+    img_npz_file, pred_save_dir, medsam_lite_model, device, attention=True
 ):
     npz_name = img_npz_file.split('/')[-1]
     npz_data = np.load(img_npz_file, 'r', allow_pickle=True)  # (H, W, 3)
