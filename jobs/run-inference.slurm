@@ -7,5 +7,5 @@
 #SBATCH --mail-user=dever120@umn.edu
 #SBATCH -p apollo_agate
 cd /home/csci5980/dever120/Explainable-MedSam
-export PATH=/home/csci5980/dever120/miniconda3/envs/medsam/bin:$PATH
+export PATH=/home/csci5980/dever120/.conda/envs/medsam/bin:$PATH
 python -m xai_medsam.tasks run-inference
