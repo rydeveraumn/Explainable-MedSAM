@@ -8,12 +8,18 @@ import numpy as np
 import torch
 import tqdm
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
+from segment_anything.modeling.transformer import Attention as SamAttention
 from skimage import transform
 from torchvision.ops import masks_to_boxes
 
 # first party
+from tiny_vit_sam import Attention as ViTAttention
 from tiny_vit_sam import TinyViT
 from xai_medsam.models import MedSAM_Lite
+from xai_medsam.overrides import (
+    SamAttention_forward_override,
+    ViTAttention_forward_override,
+)
 
 # Training data path
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
@@ -35,6 +41,11 @@ MODALITIES = [
     'US',
     'XRay',
 ]
+
+
+# Override the forward pass for the attention mechanisms
+ViTAttention.forward = ViTAttention_forward_override  # type: ignore
+SamAttention.forward = SamAttention_forward_override  # type: ignore
 
 
 @torch.no_grad()
@@ -79,7 +90,22 @@ def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
     return medsam_seg, iou
 
 
-def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device):
+def get_attns(module, prefix=''):
+    """
+    Function to extract output of attention
+    layers
+    """
+    attns = {}
+    for name, m in module.named_modules():
+        if isinstance(m, SamAttention) or isinstance(m, ViTAttention):
+            attns[prefix + name] = m.attention_map.cpu().numpy().astype(np.float16)
+
+    return attns
+
+
+def MedSAM_infer_npz_2D(
+    img_npz_file, pred_save_dir, medsam_lite_model, device, attention=False
+):
     npz_name = img_npz_file.split('/')[-1]
     npz_data = np.load(img_npz_file, 'r', allow_pickle=True)  # (H, W, 3)
     img_3c = npz_data['imgs']  # (H, W, 3)
@@ -109,8 +135,12 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device):
     img_256_tensor = (
         torch.tensor(img_256_norm).float().permute(2, 0, 1).unsqueeze(0).to(device)
     )
+
+    # Extract attention layers
+    attns = {}
     with torch.no_grad():
         image_embedding = medsam_lite_model.image_encoder(img_256_tensor)
+        attns.update(get_attns(medsam_lite_model.image_encoder))
 
     for idx, box in enumerate(boxes, start=1):
         box256 = box / np.array([W, H, W, H]) * target_size
@@ -118,13 +148,19 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device):
         medsam_mask, iou_pred = medsam_inference(
             medsam_lite_model, image_embedding, box256, (newh, neww), (H, W)
         )
+        attns.update(get_attns(medsam_lite_model.mask_decoder, prefix=f'box{idx}_'))
         segs[medsam_mask > 0] = idx
         # print(f'{npz_name}, box: {box},
         # predicted iou: {np.round(iou_pred.item(), 4)}')
 
+    to_save = {
+        'segs': segs,
+        **(attns if attention else {}),
+    }
+
     np.savez_compressed(
         os.path.join(pred_save_dir, npz_name),
-        segs=segs,
+        **to_save,
     )
 
 
