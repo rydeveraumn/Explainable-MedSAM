@@ -8,6 +8,7 @@ import click
 import numpy as np
 import torch
 import tqdm
+import wandb
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from segment_anything.modeling.transformer import Attention as SamAttention
 from skimage import transform
@@ -26,7 +27,10 @@ from xai_medsam.overrides import (
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
 VALIDATION_DATA_PATH = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation'  # noqa
 SAVE_DATA_PATH = VALIDATION_DATA_PATH  # noqa
-PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-medsam-lite-segs/'  # noqa
+PRED_SAVE_DIR = (
+    '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/test/'  # noqa
+)
+# PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-medsam-lite-segs/'  # noqa
 
 # Modalities in the training data
 MODALITIES = [
@@ -239,6 +243,21 @@ def run_inference() -> None:
     torch.cuda.manual_seed(2024)
     np.random.seed(2024)
 
+    API_KEY = '2080070c4753d0384b073105ed75e1f46669e4bf'
+    PROJECT_NAME = 'Explainable-MedSAM'
+
+    # Enable wandb
+    wandb.login(key=API_KEY)
+
+    # Initalize wandb
+    # TODO: Save training and validation curves per fold
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project=PROJECT_NAME,
+        tags=['xai-medsam'],
+    )
+    print('Start inference 🎉')
+
     # Device will be cpu
     device = torch.device('cpu')
 
@@ -318,6 +337,8 @@ def run_inference() -> None:
         except Exception as e:
             print(e)
             exceptions_list.append(img_npz_file)
+
+    print('Inference completed! ✅')
 
 
 if __name__ == "__main__":
