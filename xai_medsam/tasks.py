@@ -6,6 +6,7 @@ from typing import List
 # third party
 import click
 import numpy as np
+import pandas as pd
 import torch
 import tqdm
 import wandb
@@ -17,6 +18,7 @@ from torchvision.ops import masks_to_boxes
 # first party
 from tiny_vit_sam import Attention as ViTAttention
 from tiny_vit_sam import TinyViT
+from xai_medsam.metrics import compute_multi_class_dsc
 from xai_medsam.models import MedSAM_Lite
 from xai_medsam.overrides import (
     SamAttention_forward_override,
@@ -339,6 +341,52 @@ def run_inference() -> None:
             exceptions_list.append(img_npz_file)
 
     print('Inference completed! ✅')
+
+
+@click.command('run-compute-metrics')
+def compute_metrics() -> None:
+    """
+    Task to compute the Dice coefficient
+    """
+    validation_data = os.path.join(VALIDATION_DATA_PATH, '*')
+    validation_file_names = []
+    for name in validation_data:
+        file = name.split('/')[-1]
+        validation_file_names.append(file)
+
+    metrics = []
+    for name in validation_file_names:
+        img_npz_file = os.path.join(VALIDATION_DATA_PATH, name)
+        pred_path = os.path.join(PRED_SAVE_DIR, name)
+        modality_type = name.split('-')[0]
+
+        # Load the data & compute metrics for image
+        npz_data = np.load(img_npz_file, 'r', allow_pickle=True)
+        gt = npz_data['gts']
+
+        # Weird issue?
+        # Just compute as one large segmentation
+        gt[gt != 0] = 1
+
+        # Load predictions
+        predictions = np.load(pred_path, 'r', allow_pickle=True)
+        segs = predictions['segs']
+
+        # Dice score
+        dsc_score = compute_multi_class_dsc(gt, segs)
+
+        metrics.append((name, modality_type, dsc_score))
+
+    # Turn metrics into pandas data frame
+    metrics_df = pd.DataFrame(
+        metrics, columns=['filename', 'modality_type', 'dice_score']
+    )
+    metrics_df.to_parquet(
+        os.path.join(
+            '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets',
+            'medsam-metrics.parquet',
+        )
+    )
 
 
 if __name__ == "__main__":
