@@ -796,3 +796,12 @@ def compute_dice_coefficient(mask_gt, mask_pred):
 
     volume_intersect = (mask_gt & mask_pred).sum()
     return 2 * volume_intersect / volume_sum
+
+
+def compute_multi_class_dsc(gt, seg):
+    dsc = []
+    for i in range(1, gt.max() + 1):
+        gt_i = gt == i
+        seg_i = seg == i
+        dsc.append(compute_dice_coefficient(gt_i, seg_i))
+    return np.mean(dsc)
