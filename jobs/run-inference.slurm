@@ -8,4 +8,4 @@
 #SBATCH -p apollo_agate
 cd /home/csci5980/dever120/Explainable-MedSam
 export PATH=/home/csci5980/dever120/.conda/envs/medsam/bin:$PATH
-python -m xai_medsam.tasks run-inference
+python -m xai_medsam run-inference -i /panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation -o /panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/test/ --lite_medsam_checkpoint_path /panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/lite_medsam.pth
