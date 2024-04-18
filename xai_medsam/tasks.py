@@ -230,6 +230,7 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device, 
             show_mask((segs == i+1).astype(np.uint8), ax[1], mask_color=color)
 
         plt.tight_layout()
+        os.makedirs(png_save_dir, exist_ok=True)
         plt.savefig(os.path.join(png_save_dir, npz_name.split(".")[0] + '.png'), dpi=300)
         plt.close()
 
@@ -399,7 +400,8 @@ def run_inference(input_dir, output_dir, lite_medsam_checkpoint_path, device, sa
     
     # Run the inference for all validation data
     exceptions_list: List[str] = []
-    for img_npz_file in tqdm.tqdm(validation_files):
+    pbar = tqdm.tqdm(validation_files)
+    for img_npz_file in pbar:
         start_time = time()
         try:
             MedSAM_infer_npz_2D(
@@ -413,14 +415,14 @@ def run_inference(input_dir, output_dir, lite_medsam_checkpoint_path, device, sa
             )
 
         except Exception as e:
-            print(e)
+            pbar.write(e)
             exceptions_list.append(img_npz_file)
             
         end_time = time()
         efficiency['case'].append(os.path.basename(img_npz_file))
         efficiency['time'].append(end_time - start_time)
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(current_time, 'file name:', os.path.basename(img_npz_file), 'time cost:', np.round(end_time - start_time, 4))
+        pbar.write(f'{current_time} file name: {os.path.basename(img_npz_file)} time cost: {np.round(end_time - start_time, 4)}')
     efficiency_df = pd.DataFrame(efficiency)
     efficiency_df.to_csv(os.path.join(output_dir, 'efficiency.csv'), index=False)
 
