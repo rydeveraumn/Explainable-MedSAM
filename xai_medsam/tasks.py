@@ -4,15 +4,21 @@ import os
 from typing import List
 
 # third party
+import click
 import numpy as np
+import pandas as pd
 import torch
 import tqdm
+import wandb
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
+from segment_anything.modeling.transformer import Attention as SamAttention
 from skimage import transform
 from torchvision.ops import masks_to_boxes
 
 # first party
+from tiny_vit_sam import Attention as ViTAttention
 from tiny_vit_sam import TinyViT
+from xai_medsam.metrics import compute_multi_class_dsc
 from xai_medsam.models import MedSAM_Lite
 from tiny_vit_sam import Attention as ViTAttention
 from segment_anything.modeling.transformer import Attention as SamAttention
@@ -22,7 +28,10 @@ from matplotlib import pyplot as plt
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
 VALIDATION_DATA_PATH = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation'  # noqa
 SAVE_DATA_PATH = VALIDATION_DATA_PATH  # noqa
-PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-medsam-lite-segs/'  # noqa
+PRED_SAVE_DIR = (
+    '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/test/'  # noqa
+)
+# PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-medsam-lite-segs/'  # noqa
 
 # Modalities in the training data
 MODALITIES = [
@@ -38,6 +47,17 @@ MODALITIES = [
     'US',
     'XRay',
 ]
+
+
+# Add click group for cli commands
+@click.group()
+def cli():  # noqa
+    pass
+
+
+# Override the forward pass for the attention mechanisms
+ViTAttention.forward = ViTAttention_forward_override  # type: ignore
+SamAttention.forward = SamAttention_forward_override  # type: ignore
 
 
 @torch.no_grad()
@@ -130,6 +150,18 @@ def show_box(box, ax, edgecolor='blue'):
     w, h = box[2] - box[0], box[3] - box[1]
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor=edgecolor, facecolor=(0,0,0,0), lw=2)) 
 
+def get_attns(module, prefix=''):
+    """
+    Function to extract output of attention
+    layers
+    """
+    attns = {}
+    for name, m in module.named_modules():
+        if isinstance(m, SamAttention) or isinstance(m, ViTAttention):
+            attns[prefix + name] = m.attention_map.cpu().numpy().astype(np.float16)
+
+    return attns
+
 def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device, attention=False, save_overlay=False, png_save_dir='./'):
     npz_name = os.path.basename(img_npz_file)
     npz_data = np.load(img_npz_file, 'r', allow_pickle=True)  # (H, W, 3)
@@ -171,6 +203,7 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device, 
         medsam_mask, iou_pred = medsam_inference(
             medsam_lite_model, image_embedding, box256, (newh, neww), (H, W)
         )
+        attns.update(get_attns(medsam_lite_model.mask_decoder, prefix=f'box{idx}_'))
         segs[medsam_mask > 0] = idx
         # print(f'{npz_name}, box: {box},
         # predicted iou: {np.round(iou_pred.item(), 4)}')
@@ -257,6 +290,7 @@ def build_validation_data_from_train() -> None:
             np.savez(file_save_path, imgs=img, gts=mask, boxes=boxes)
 
 
+@cli.command('run-inference')
 def run_inference() -> None:
     """
     Task to run inference on validation images. This will save the
@@ -269,6 +303,21 @@ def run_inference() -> None:
     torch.manual_seed(2024)
     torch.cuda.manual_seed(2024)
     np.random.seed(2024)
+
+    API_KEY = '2080070c4753d0384b073105ed75e1f46669e4bf'
+    PROJECT_NAME = 'Explainable-MedSAM'
+
+    # Enable wandb
+    wandb.login(key=API_KEY)
+
+    # Initalize wandb
+    # TODO: Save training and validation curves per fold
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project=PROJECT_NAME,
+        tags=['xai-medsam'],
+    )
+    print('Start inference 🎉')
 
     # Device will be cpu
     device = torch.device('cpu')
@@ -349,3 +398,56 @@ def run_inference() -> None:
         except Exception as e:
             print(e)
             exceptions_list.append(img_npz_file)
+
+    print('Inference completed! ✅')
+
+
+@click.command('run-compute-metrics')
+def compute_metrics() -> None:
+    """
+    Task to compute the Dice coefficient
+    """
+    validation_data = os.path.join(VALIDATION_DATA_PATH, '*')
+    validation_file_names = []
+    for name in validation_data:
+        file = name.split('/')[-1]
+        validation_file_names.append(file)
+
+    metrics = []
+    for name in validation_file_names:
+        img_npz_file = os.path.join(VALIDATION_DATA_PATH, name)
+        pred_path = os.path.join(PRED_SAVE_DIR, name)
+        modality_type = name.split('-')[0]
+
+        # Load the data & compute metrics for image
+        npz_data = np.load(img_npz_file, 'r', allow_pickle=True)
+        gt = npz_data['gts']
+
+        # Weird issue?
+        # Just compute as one large segmentation
+        gt[gt != 0] = 1
+
+        # Load predictions
+        predictions = np.load(pred_path, 'r', allow_pickle=True)
+        segs = predictions['segs']
+
+        # Dice score
+        dsc_score = compute_multi_class_dsc(gt, segs)
+
+        metrics.append((name, modality_type, dsc_score))
+
+    # Turn metrics into pandas data frame
+    metrics_df = pd.DataFrame(
+        metrics, columns=['filename', 'modality_type', 'dice_score']
+    )
+    metrics_df.to_parquet(
+        os.path.join(
+            '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets',
+            'medsam-metrics.parquet',
+        )
+    )
+
+
+if __name__ == "__main__":
+    # Be able to run different commands
+    cli()
