@@ -28,9 +28,7 @@ from matplotlib import pyplot as plt
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
 VALIDATION_DATA_PATH = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation'  # noqa
 SAVE_DATA_PATH = VALIDATION_DATA_PATH  # noqa
-PRED_SAVE_DIR = (
-    '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/test/'  # noqa
-)
+PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/test/'  # noqa
 # PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-medsam-lite-segs/'  # noqa
 
 # Modalities in the training data
@@ -54,11 +52,8 @@ MODALITIES = [
 def cli():  # noqa
     pass
 
-
-# Override the forward pass for the attention mechanisms
-ViTAttention.forward = ViTAttention_forward_override  # type: ignore
-SamAttention.forward = SamAttention_forward_override  # type: ignore
-
+def test():
+    print('Hello World')
 
 @torch.no_grad()
 def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
@@ -291,7 +286,15 @@ def build_validation_data_from_train() -> None:
 
 
 @cli.command('run-inference')
-def run_inference() -> None:
+@click.option('-i', '--input_dir', type=str, help='Root directory of the data')
+@click.option('-o', '--output_dir', type=str, help='Directory to save the prediction')
+@click.option('--lite_medsam_checkpoint_path', type=str, help='Path to the checkpoint of MedSAM-Lite')
+@click.option('-d', '--device', type=str, default='cpu', help='Device to run the inference')
+@click.option('--save_overlay', is_flag=True, default=True, help='Whether to save the overlay image')
+@click.option('--png_save_dir', type=str, default='./overlay', help='Directory to save the overlay image')
+@click.option('--attention', is_flag=True, default=False, help='Save attention scores')
+@click.option('--samples', type=int, default=0, help='Max number of samples to run inference on')
+def run_inference(input_dir, output_dir, lite_medsam_checkpoint_path, device, save_overlay, png_save_dir, attention, samples) -> None:
     """
     Task to run inference on validation images. This will save the
     segmentation masks so we can compute metrics.
@@ -374,7 +377,7 @@ def run_inference() -> None:
 
     # For this code the model path will be fixed
     lite_medsam_checkpoint = torch.load(
-        '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/lite_medsam.pth',
+        lite_medsam_checkpoint_path,
         map_location='cpu',
     )
     medsam_lite_model.load_state_dict(lite_medsam_checkpoint)
@@ -382,7 +385,7 @@ def run_inference() -> None:
     medsam_lite_model.eval()
 
     # Iterate over the saved data
-    validation_files = glob.glob(os.path.join(VALIDATION_DATA_PATH, '*'))
+    validation_files = glob.glob(os.path.join(input_dir, '*'))
 
     # Run the inference for all validation data
     exceptions_list: List[str] = []
@@ -390,9 +393,12 @@ def run_inference() -> None:
         try:
             MedSAM_infer_npz_2D(
                 img_npz_file=img_npz_file,
-                pred_save_dir=PRED_SAVE_DIR,
+                pred_save_dir=output_dir,
                 medsam_lite_model=medsam_lite_model,
                 device=device,
+                attention=attention,
+                save_overlay=save_overlay,
+                png_save_dir=png_save_dir,
             )
 
         except Exception as e:
