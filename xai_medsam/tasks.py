@@ -160,7 +160,7 @@ def get_attns(module, prefix=''):
 
     return attns
 
-def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device, attention=False, save_overlay=False, png_save_dir='./'):
+def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device, attention=False, png_save_dir=None):
     npz_name = os.path.basename(img_npz_file)
     npz_data = np.load(img_npz_file, 'r', allow_pickle=True)  # (H, W, 3)
     img_3c = npz_data['imgs']  # (H, W, 3)
@@ -214,7 +214,7 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device, 
         os.path.join(pred_save_dir, npz_name),
         **to_save,
     )
-    if save_overlay:
+    if png_save_dir is not None:
         fig, ax = plt.subplots(1, 2, figsize=(10, 5))
         ax[0].imshow(img_3c)
         ax[1].imshow(img_3c)
@@ -294,11 +294,10 @@ def build_validation_data_from_train() -> None:
 @click.option('-o', '--output_dir', type=str, help='Directory to save the prediction')
 @click.option('--lite_medsam_checkpoint_path', type=str, help='Path to the checkpoint of MedSAM-Lite')
 @click.option('-d', '--device', type=str, default='cpu', help='Device to run the inference')
-@click.option('--save_overlay', is_flag=True, default=True, help='Whether to save the overlay image')
-@click.option('--png_save_dir', type=str, default='./overlay', help='Directory to save the overlay image')
+@click.option('--png_save_dir', type=str, default=None, help='Directory to save the overlay image')
 @click.option('--attention', is_flag=True, default=False, help='Save attention scores')
 @click.option('--samples', type=int, default=0, help='Max number of samples to run inference on')
-def run_inference(input_dir, output_dir, lite_medsam_checkpoint_path, device, save_overlay, png_save_dir, attention, samples) -> None:
+def run_inference(input_dir, output_dir, lite_medsam_checkpoint_path, device, png_save_dir, attention, samples) -> None:
     """
     Task to run inference on validation images. This will save the
     segmentation masks so we can compute metrics.
@@ -410,12 +409,11 @@ def run_inference(input_dir, output_dir, lite_medsam_checkpoint_path, device, sa
                 medsam_lite_model=medsam_lite_model,
                 device=device,
                 attention=attention,
-                save_overlay=save_overlay,
                 png_save_dir=png_save_dir,
             )
 
         except Exception as e:
-            pbar.write(e)
+            pbar.write(f'Error in file {img_npz_file}: {e}')
             exceptions_list.append(img_npz_file)
             
         end_time = time()
