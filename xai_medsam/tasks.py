@@ -27,20 +27,18 @@ from xai_medsam.models import MedSAM_Lite
 
 # Training data path
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
-VALIDATION_DATA_PATH = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation'  # noqa
+VALIDATION_DATA_PATH = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-v2'  # noqa
 SAVE_DATA_PATH = VALIDATION_DATA_PATH  # noqa
 PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-medsam-lite-segs-v2/'  # noqa
 # PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-medsam-lite-segs/'  # noqa
 
 # Modalities in the training data
 MODALITIES = [
-    'CT',
     'Dermoscopy',
     'Endoscopy',
     'Fundus',
     'Mammography',
     'Microscopy',
-    'MR',
     'OCT',
     'PET',
     'US',
@@ -238,6 +236,52 @@ def MedSAM_infer_npz_2D(
         plt.close()
 
 
+def add_multiple_image_validation_data_from_train(modality: str = 'CT') -> None:
+    """
+    CT/MR data is set up different from other modality types
+    so we created a method to handle CT data differently
+    """
+    # Get random files from CT
+    path = os.path.join(TRAIN_DATA_PATH, f'{modality}/*/*')
+
+    # Glob will give us a list of all of the files in the directory
+    files = glob.glob(path)
+    files = list(np.random.choice(files, 250))
+
+    # Iterate over the different files
+    for idx, file in enumerate(files):
+        # get the file name
+        name = file.split('/')[-1]
+
+        # Load in the data
+        data = np.load(file, 'r', allow_pickle=True)
+
+        # Just pick the first image
+        img = data['imgs'][0, :, :]
+        gts = data['gts'][0, :, :]
+
+        # Create bounding box from masks
+        mask = torch.tensor(gts.astype(np.int32))
+
+        # We get the unique colors, as these would be the object ids.
+        obj_ids = torch.unique(mask)
+
+        # first id is the background, so remove it.
+        obj_ids = obj_ids[1:]
+
+        # split the color-encoded mask into a set of boolean masks.
+        # Note that this snippet would work as well
+        # if the masks were float values instead of ints.
+        masks = mask == obj_ids[:, None, None]
+
+        # Create the boxes with torchvision module
+        boxes = masks_to_boxes(masks)
+
+        # Save the data
+        file_save_path = os.path.join(SAVE_DATA_PATH, name)
+        np.savez(file_save_path, imgs=img, gts=mask, boxes=boxes)
+
+
 def build_validation_data_from_train() -> None:
     """
     This information comes from the dataset email:
@@ -259,11 +303,12 @@ def build_validation_data_from_train() -> None:
 
         # Glob will give us a list of all of the files in the directory
         files = glob.glob(path)
-        files = list(np.random.choice(files, 100))
+        files = list(np.random.choice(files, 250))
 
     # Iterate over the files and omit any images that are not 2D
     # based off a simple heuristic
     for idx, file in enumerate(files):
+        name = file.split('/')[-1]
         # Load in the data
         data = np.load(file)
         img = data['imgs']
@@ -288,8 +333,14 @@ def build_validation_data_from_train() -> None:
             boxes = masks_to_boxes(masks)
 
             # Save the data
-            file_save_path = os.path.join(SAVE_DATA_PATH, f'{modality}-{idx}.npz')
+            file_save_path = os.path.join(SAVE_DATA_PATH, name)
             np.savez(file_save_path, imgs=img, gts=mask, boxes=boxes)
+
+    # Add CT data separately
+    add_multiple_image_validation_data_from_train(modality='CT')
+
+    # Add MR data separately
+    add_multiple_image_validation_data_from_train(modality='MR')
 
 
 @cli.command('run-inference')
