@@ -44,6 +44,7 @@ MODALITIES = [
     'US',
     'XRay',
 ]
+SAMPLES = 250
 
 
 # Add click group for cli commands
@@ -246,7 +247,7 @@ def add_multiple_image_validation_data_from_train(modality: str = 'CT') -> None:
 
     # Glob will give us a list of all of the files in the directory
     files = glob.glob(path)
-    files = list(np.random.choice(files, 1))
+    files = list(np.random.choice(files, SAMPLES))
 
     # Iterate over the different files
     for idx, file in enumerate(files):
@@ -304,7 +305,7 @@ def build_validation_data_from_train() -> None:
 
         # Glob will give us a list of all of the files in the directory
         mod_files = glob.glob(path)
-        mod_files = list(np.random.choice(mod_files, 1))
+        mod_files = list(np.random.choice(mod_files, SAMPLES))
         files.extend(mod_files)
 
     # Iterate over the files and omit any images that are not 2D
