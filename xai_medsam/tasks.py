@@ -246,7 +246,7 @@ def add_multiple_image_validation_data_from_train(modality: str = 'CT') -> None:
 
     # Glob will give us a list of all of the files in the directory
     files = glob.glob(path)
-    files = list(np.random.choice(files, 250))
+    files = list(np.random.choice(files, 1))
 
     # Iterate over the different files
     for idx, file in enumerate(files):
@@ -297,13 +297,15 @@ def build_validation_data_from_train() -> None:
     We recommend building your validation set as well by
     selecting 5-10% of the training cases.
     """
+    files = []
     for modality in tqdm.tqdm(MODALITIES):
         # Load in data from modality
         path = os.path.join(TRAIN_DATA_PATH, f'{modality}/*/*')
 
         # Glob will give us a list of all of the files in the directory
-        files = glob.glob(path)
-        files = list(np.random.choice(files, 250))
+        mod_files = glob.glob(path)
+        mod_files = list(np.random.choice(mod_files, 1))
+        files.extend(mod_files)
 
     # Iterate over the files and omit any images that are not 2D
     # based off a simple heuristic
