@@ -1,7 +1,12 @@
+# third party
 from setuptools import find_packages, setup
 
 with open('requirements.txt') as f:
-    required = [line.strip() for line in f.read().splitlines() if line.strip() and not line.startswith('#')]
+    required = [
+        line.strip()
+        for line in f.read().splitlines()
+        if line.strip() and not line.startswith('#')
+    ]
 
 setup(
     name="xai_medsam",
@@ -12,5 +17,5 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/rydeveraumn/Explainable-MedSam",
     packages=find_packages(),
-    install_requires=required
+    install_requires=required,
 )

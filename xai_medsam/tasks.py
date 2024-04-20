@@ -1,8 +1,8 @@
 # stdlib
-from collections import OrderedDict
-from datetime import datetime
 import glob
 import os
+from collections import OrderedDict
+from datetime import datetime
 from time import time
 from typing import List
 
@@ -13,6 +13,7 @@ import pandas as pd
 import torch
 import tqdm
 import wandb
+from matplotlib import pyplot as plt
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from segment_anything.modeling.transformer import Attention as SamAttention
 from skimage import transform
@@ -23,15 +24,12 @@ from tiny_vit_sam import Attention as ViTAttention
 from tiny_vit_sam import TinyViT
 from xai_medsam.metrics import compute_multi_class_dsc
 from xai_medsam.models import MedSAM_Lite
-from tiny_vit_sam import Attention as ViTAttention
-from segment_anything.modeling.transformer import Attention as SamAttention
-from matplotlib import pyplot as plt
 
 # Training data path
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
 VALIDATION_DATA_PATH = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation'  # noqa
 SAVE_DATA_PATH = VALIDATION_DATA_PATH  # noqa
-PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/test/'  # noqa
+PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-medsam-lite-segs-v2/'  # noqa
 # PRED_SAVE_DIR = '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets/validation-medsam-lite-segs/'  # noqa
 
 # Modalities in the training data
@@ -55,8 +53,10 @@ MODALITIES = [
 def cli():  # noqa
     pass
 
+
 def test():
     print('Hello World')
+
 
 @torch.no_grad()
 def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
@@ -99,13 +99,6 @@ def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
 
     return medsam_seg, iou
 
-def get_attns(module, prefix=''):
-    attns = {}
-    for name, m in module.named_modules():
-        if isinstance(m, SamAttention) or isinstance(m, ViTAttention):
-            attns[prefix + name] = m.attention_map.cpu().numpy().astype(np.half)
-    return attns
-
 
 def show_mask(mask, ax, mask_color=None, alpha=0.5):
     """
@@ -125,7 +118,7 @@ def show_mask(mask, ax, mask_color=None, alpha=0.5):
     if mask_color is not None:
         color = np.concatenate([mask_color, np.array([alpha])], axis=0)
     else:
-        color = np.array([251/255, 252/255, 30/255, alpha])
+        color = np.array([251 / 255, 252 / 255, 30 / 255, alpha])
     h, w = mask.shape[-2:]
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
@@ -146,7 +139,10 @@ def show_box(box, ax, edgecolor='blue'):
     """
     x0, y0 = box[0], box[1]
     w, h = box[2] - box[0], box[3] - box[1]
-    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor=edgecolor, facecolor=(0,0,0,0), lw=2)) 
+    ax.add_patch(
+        plt.Rectangle((x0, y0), w, h, edgecolor=edgecolor, facecolor=(0, 0, 0, 0), lw=2)
+    )
+
 
 def get_attns(module, prefix=''):
     """
@@ -160,7 +156,15 @@ def get_attns(module, prefix=''):
 
     return attns
 
-def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device, attention=False, png_save_dir=None):
+
+def MedSAM_infer_npz_2D(
+    img_npz_file,
+    pred_save_dir,
+    medsam_lite_model,
+    device,
+    attention=False,
+    png_save_dir=None,
+):
     npz_name = os.path.basename(img_npz_file)
     npz_data = np.load(img_npz_file, 'r', allow_pickle=True)  # (H, W, 3)
     img_3c = npz_data['imgs']  # (H, W, 3)
@@ -206,10 +210,7 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device, 
         # print(f'{npz_name}, box: {box},
         # predicted iou: {np.round(iou_pred.item(), 4)}')
 
-    to_save = {
-        'segs': segs,
-        **(attns if attention else {})
-    }
+    to_save = {'segs': segs, **(attns if attention else {})}
     np.savez_compressed(
         os.path.join(pred_save_dir, npz_name),
         **to_save,
@@ -227,11 +228,13 @@ def MedSAM_infer_npz_2D(img_npz_file, pred_save_dir, medsam_lite_model, device, 
             color = np.random.rand(3)
             box_viz = box
             show_box(box_viz, ax[1], edgecolor=color)
-            show_mask((segs == i+1).astype(np.uint8), ax[1], mask_color=color)
+            show_mask((segs == i + 1).astype(np.uint8), ax[1], mask_color=color)
 
         plt.tight_layout()
         os.makedirs(png_save_dir, exist_ok=True)
-        plt.savefig(os.path.join(png_save_dir, npz_name.split(".")[0] + '.png'), dpi=300)
+        plt.savefig(
+            os.path.join(png_save_dir, npz_name.split(".")[0] + '.png'), dpi=300
+        )
         plt.close()
 
 
@@ -292,12 +295,30 @@ def build_validation_data_from_train() -> None:
 @cli.command('run-inference')
 @click.option('-i', '--input_dir', type=str, help='Root directory of the data')
 @click.option('-o', '--output_dir', type=str, help='Directory to save the prediction')
-@click.option('--lite_medsam_checkpoint_path', type=str, help='Path to the checkpoint of MedSAM-Lite')
-@click.option('-d', '--device', type=str, default='cpu', help='Device to run the inference')
-@click.option('--png_save_dir', type=str, default=None, help='Directory to save the overlay image')
+@click.option(
+    '--lite_medsam_checkpoint_path',
+    type=str,
+    help='Path to the checkpoint of MedSAM-Lite',
+)
+@click.option(
+    '-d', '--device', type=str, default='cpu', help='Device to run the inference'
+)
+@click.option(
+    '--png_save_dir', type=str, default=None, help='Directory to save the overlay image'
+)
 @click.option('--attention', is_flag=True, default=False, help='Save attention scores')
-@click.option('--samples', type=int, default=0, help='Max number of samples to run inference on')
-def run_inference(input_dir, output_dir, lite_medsam_checkpoint_path, device, png_save_dir, attention, samples) -> None:
+@click.option(
+    '--samples', type=int, default=0, help='Max number of samples to run inference on'
+)
+def run_inference(
+    input_dir,
+    output_dir,
+    lite_medsam_checkpoint_path,
+    device,
+    png_save_dir,
+    attention,
+    samples,
+) -> None:
     """
     Task to run inference on validation images. This will save the
     segmentation masks so we can compute metrics.
@@ -393,10 +414,10 @@ def run_inference(input_dir, output_dir, lite_medsam_checkpoint_path, device, pn
         r = np.random.default_rng(0)
         validation_files = r.choice(validation_files, samples, replace=False)
 
-    efficiency = OrderedDict()
+    efficiency = OrderedDict()  # type: ignore
     efficiency['case'] = []
     efficiency['time'] = []
-    
+
     # Run the inference for all validation data
     exceptions_list: List[str] = []
     pbar = tqdm.tqdm(validation_files)
@@ -415,12 +436,15 @@ def run_inference(input_dir, output_dir, lite_medsam_checkpoint_path, device, pn
         except Exception as e:
             pbar.write(f'Error in file {img_npz_file}: {e}')
             exceptions_list.append(img_npz_file)
-            
+
         end_time = time()
         efficiency['case'].append(os.path.basename(img_npz_file))
         efficiency['time'].append(end_time - start_time)
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        pbar.write(f'{current_time} file name: {os.path.basename(img_npz_file)} time cost: {np.round(end_time - start_time, 4)}')
+        pbar.write(
+            f'{current_time} file name: {os.path.basename(img_npz_file)}'
+            f' time cost: {np.round(end_time - start_time, 4)}'
+        )
     efficiency_df = pd.DataFrame(efficiency)
     efficiency_df.to_csv(os.path.join(output_dir, 'efficiency.csv'), index=False)
 
@@ -455,6 +479,9 @@ def compute_metrics() -> None:
         # Load predictions
         predictions = np.load(pred_path, 'r', allow_pickle=True)
         segs = predictions['segs']
+
+        # Need to do the same with the predictions
+        segs[segs != 0] = 1
 
         # Dice score
         dsc_score = compute_multi_class_dsc(gt, segs)
