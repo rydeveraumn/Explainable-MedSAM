@@ -167,6 +167,11 @@ def MedSAM_infer_npz_2D(
     npz_name = os.path.basename(img_npz_file)
     npz_data = np.load(img_npz_file, 'r', allow_pickle=True)  # (H, W, 3)
     img_3c = npz_data['imgs']  # (H, W, 3)
+
+    if img_3c.shape < 3:
+        # Need to create a 3D image
+        # stack along the last axis
+        img_3c = np.stack([img_3c] * 3, axis=-1)
     assert (
         np.max(img_3c) < 256
     ), f'input data should be in range [0, 255], but got {np.unique(img_3c)}'  # noqa
