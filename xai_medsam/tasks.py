@@ -510,7 +510,6 @@ def run_inference(
     print('Inference completed! ✅')
 
 
-@click.command('run-compute-metrics')
 def compute_metrics(save_version: str = 'v1') -> None:
     """
     Task to compute the Dice coefficient
