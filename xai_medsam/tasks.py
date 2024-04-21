@@ -511,7 +511,7 @@ def run_inference(
 
 
 @click.command('run-compute-metrics')
-def compute_metrics() -> None:
+def compute_metrics(save_version: str = 'v1') -> None:
     """
     Task to compute the Dice coefficient
     """
@@ -554,7 +554,7 @@ def compute_metrics() -> None:
     metrics_df.to_parquet(
         os.path.join(
             '/panfs/jay/groups/7/csci5980/dever120/Explainable-MedSam/datasets',
-            'medsam-metrics.parquet',
+            f'medsam-metrics-{save_version}.parquet',
         )
     )
 
