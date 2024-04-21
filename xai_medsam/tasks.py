@@ -514,7 +514,7 @@ def compute_metrics(save_version: str = 'v1') -> None:
     """
     Task to compute the Dice coefficient
     """
-    validation_data = os.path.join(VALIDATION_DATA_PATH, '*')
+    validation_data = glob.glob(os.path.join(VALIDATION_DATA_PATH, '*'))
     validation_file_names = []
     for name in validation_data:
         file = name.split('/')[-1]
