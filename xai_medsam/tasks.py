@@ -521,7 +521,7 @@ def compute_metrics(save_version: str = 'v1') -> None:
         validation_file_names.append(file)
 
     metrics = []
-    for name in validation_file_names:
+    for name in tqdm.tqdm(validation_file_names):
         img_npz_file = os.path.join(VALIDATION_DATA_PATH, name)
         pred_path = os.path.join(PRED_SAVE_DIR, name)
         modality_type = name.split('-')[0]
