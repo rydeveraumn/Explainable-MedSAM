@@ -524,7 +524,7 @@ def compute_metrics(save_version: str = 'v1') -> None:
     for name in tqdm.tqdm(validation_file_names):
         img_npz_file = os.path.join(VALIDATION_DATA_PATH, name)
         pred_path = os.path.join(PRED_SAVE_DIR, name)
-        modality_type = name.split('-')[0]
+        modality_type = name.split('_')[0]
 
         # Load the data & compute metrics for image
         npz_data = np.load(img_npz_file, 'r', allow_pickle=True)
