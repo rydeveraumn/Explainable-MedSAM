@@ -425,8 +425,8 @@ def create_attention_maps(segs_dir, data_dir, output_dir):
         n_boxes = set([int(k.split('_')[0][3:]) for k in segs.keys() if 'box' in k])
         subpbar = tqdm(n_boxes)
         for b in subpbar:
-            mask = masks[b]
-            contour = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cntmask = (masks == b).astype(np.uint8)
+            contour = cv2.findContours(cntmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             s = []
             for k in filter(lambda x: 'attn_token_to_image' in x and f'box{b}_' in x, segs.keys()):
                 s.append(segs[k][:,:,-2:,:])
@@ -440,6 +440,8 @@ def create_attention_maps(segs_dir, data_dir, output_dir):
             attn = s.squeeze().reshape(H, Q, W, W)
             for i in range(Q):
                 canvas = img['imgs'].copy()
+                canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
+                canvas = canvas[..., None].repeat(3, axis=-1)
                 head_masks = []
                 for j in range(H):
                     mask = attn[j, i, :, :]
@@ -449,10 +451,9 @@ def create_attention_maps(segs_dir, data_dir, output_dir):
                     head_masks.append(heatmap)
                 head_masks = np.stack(head_masks).max(axis=0) * 255
                 canvas = cv2.addWeighted(canvas, 0.5, head_masks.astype(np.uint8), 0.5, 0)
-                canvas = cv2.drawContours(canvas, contour[0], -1, (255, 255, 0), 2)
+                canvas = cv2.drawContours(canvas, contour[0], -1, (0, 255, 255), 1)
                 file_to_save = os.path.join(output_dir, f'{os.path.basename(file).split(".")[0]}_box{b}_{query_order[i]}.png')
                 cv2.imwrite(file_to_save, canvas)
-
 
 def compute_metrics(save_version: str = 'v1') -> None:
     """
