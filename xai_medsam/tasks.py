@@ -386,6 +386,74 @@ def run_inference(
     efficiency_df.to_csv(os.path.join(output_dir, 'efficiency.csv'), index=False)
 
     print('Inference completed! ✅')
+    
+def visualize_attention(
+    img: np.ndarray, 
+    attn: np.ndarray, 
+    box: np.ndarray = None, 
+    gt: np.ndarray = None, 
+    segments: np.ndarray = None) -> np.ndarray:
+    """
+    Draws attentions, boxes, and ground truth masks on the image
+    
+    Parameters
+    ----------
+    img : np.ndarray (H, W, 3)/(H, W, 1)/(H, W), dtype=uint8
+        Image to draw on (will be copied)
+    attn : np.ndarray (Hd, Ha, Wa), dtype=float32
+        Attention maps for a given query
+    box : np.ndarray (1, 4)/(4,), dtype=uint32
+        Bounding boxes
+    gt : np.ndarray (H, W), dtype=uint8
+        Ground truth masks (0/1)
+    segments : np.ndarray (H, W), dtype=uint8
+        Segmentation masks (0/1)
+    
+    Returns
+    -------
+    np.ndarray (H, W, 3), dtype=uint8
+        Image with attention, boxes, and ground truth masks
+    """
+    canvas = img.copy()
+    colors = [
+        (0x00, 0x64, 0x00),   # darkgreen
+        (0x00, 0x00, 0xff),   # red
+        (0x00, 0xd7, 0xff),   # gold
+        (0x85, 0x15, 0xc7),   # mediumvioletred
+        (0x00, 0xff, 0x00),   # lime
+        (0xff, 0xff, 0x00),   # aqua
+        (0xff, 0x00, 0x00),   # blue
+        (0xff, 0x90, 0x1e)    # dodgerblue
+    ]
+    if len(canvas.shape) == 3:
+        canvas = cv2.cvtColor(canvas, cv2.COLOR_RGB2GRAY)
+    canvas = canvas[...,None].repeat(3, axis=-1)
+    H, W, _ = canvas.shape
+    Hd, Ha, Wa = attn.shape
+    head_masks = []
+    for i in range(Hd):
+        mask = attn[i, :, :]
+        mask = (mask * 255 / mask.max()).astype(np.uint8)
+        mask = cv2.resize(mask, (W, H))
+        heatmap = (mask[..., None] / 255) * (np.array(colors[i])[None, None, :] / 255)
+        head_masks.append(heatmap)
+    head_masks = np.stack(head_masks).max(axis=0) * 255
+    thickness = max(1, int(W/256))
+    if box is not None:
+        box = box.reshape(-1)
+        assert len(box) == 4, f'Bounding box shape mismatch: {len(box)}'
+        box = tuple(map(int, box))
+        canvas = cv2.rectangle(canvas, (box[0], box[1]), (box[2], box[3]), (255, 128, 200), thickness)
+    if gt is not None:
+        assert gt.shape == (H, W), f'Ground truth mask shape mismatch: {gt.shape} vs {(H, W)}'
+        contour = cv2.findContours(gt, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        canvas = cv2.drawContours(canvas, contour[0], -1, (255, 255, 0), thickness)
+    if segments is not None:
+        assert segments.shape == (H, W), f'Segmentation mask shape mismatch: {segments.shape} vs {(H, W)}'
+        contour = cv2.findContours(segments, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        canvas = cv2.drawContours(canvas, contour[0], -1, (0, 255, 255), thickness)
+    canvas = cv2.addWeighted(canvas, 0.5, head_masks.astype(np.uint8), 0.5, 0)
+    return canvas
 
 @cli.command('create-attention-maps')
 @click.option('-i', '--segs_dir', type=str, help='Root directory of the npz segmentation masks')
@@ -397,16 +465,6 @@ def create_attention_maps(segs_dir, data_dir, output_dir):
     """
     files = glob.glob(os.path.join(data_dir, '*.npz'))
     os.makedirs(output_dir, exist_ok=True)
-    colors = [
-        (0x00, 0x64, 0x00),   # darkgreen
-        (0x00, 0x00, 0xff),   # red
-        (0x00, 0xd7, 0xff),   # gold
-        (0x85, 0x15, 0xc7),   # mediumvioletred
-        (0x00, 0xff, 0x00),   # lime
-        (0xff, 0xff, 0x00),   # aqua
-        (0xff, 0x00, 0x00),   # blue
-        (0xff, 0x90, 0x1e)    # dodgerblue
-    ]
     query_order = [
         'layer0_topleft',
         'layer0_bottomright',
@@ -425,8 +483,10 @@ def create_attention_maps(segs_dir, data_dir, output_dir):
         n_boxes = set([int(k.split('_')[0][3:]) for k in segs.keys() if 'box' in k])
         subpbar = tqdm(n_boxes)
         for b in subpbar:
-            cntmask = (masks == b).astype(np.uint8)
-            contour = cv2.findContours(cntmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            segment = (masks == b).astype(np.uint8)
+            print(list(img.keys()))
+            gt = img['gts'] == b if 'gts' in img else None
+            box = img['boxes'][b-1] if 'boxes' in img else None
             s = []
             for k in filter(lambda x: 'attn_token_to_image' in x and f'box{b}_' in x, segs.keys()):
                 s.append(segs[k][:,:,-2:,:])
@@ -436,22 +496,10 @@ def create_attention_maps(segs_dir, data_dir, output_dir):
             B, H, Q, K = s.shape
             W = int(K ** 0.5)
             assert Q == len(query_order), f'Weird number of queries: {Q} for {file}'
-            assert H == len(colors), f'Weird number of heads: {H} for {file}'
-            attn = s.squeeze().reshape(H, Q, W, W)
+            assert H == 8, f'Weird number of heads: {H} for {file}'
+            attn = s.reshape(H, Q, W, W)
             for i in range(Q):
-                canvas = img['imgs'].copy()
-                canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
-                canvas = canvas[..., None].repeat(3, axis=-1)
-                head_masks = []
-                for j in range(H):
-                    mask = attn[j, i, :, :]
-                    mask = (mask * 255 / mask.max()).astype(np.uint8)
-                    mask = cv2.resize(mask, tuple(img['imgs'].shape[:2][::-1]))
-                    heatmap = (mask[..., None] / 255) * (np.array(colors[j])[None, None, :] / 255)
-                    head_masks.append(heatmap)
-                head_masks = np.stack(head_masks).max(axis=0) * 255
-                canvas = cv2.addWeighted(canvas, 0.5, head_masks.astype(np.uint8), 0.5, 0)
-                canvas = cv2.drawContours(canvas, contour[0], -1, (0, 255, 255), 1)
+                canvas = visualize_attention(img['imgs'], attn[:, i, :, :], box, gt, segment)
                 file_to_save = os.path.join(output_dir, f'{os.path.basename(file).split(".")[0]}_box{b}_{query_order[i]}.png')
                 cv2.imwrite(file_to_save, canvas)
 
