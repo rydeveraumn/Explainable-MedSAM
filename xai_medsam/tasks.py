@@ -8,11 +8,12 @@ from typing import List
 
 # third party
 import click
+import cv2
 import numpy as np
 import pandas as pd
 import torch
-import tqdm
 import wandb
+from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from segment_anything.modeling.transformer import Attention as SamAttention
@@ -24,6 +25,7 @@ from tiny_vit_sam import Attention as ViTAttention
 from tiny_vit_sam import TinyViT
 from xai_medsam.metrics import compute_multi_class_dsc
 from xai_medsam.models import MedSAM_Lite
+import traceback
 
 # Training data path
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
@@ -55,48 +57,6 @@ def cli():  # noqa
 
 def test():
     print('Hello World')
-
-
-@torch.no_grad()
-def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
-    """
-    Perform inference using the LiteMedSAM model.
-
-    Args:
-        medsam_model (MedSAMModel): The MedSAM model.
-        img_embed (torch.Tensor): The image embeddings.
-        box_256 (numpy.ndarray): The bounding box coordinates.
-        new_size (tuple): The new size of the image.
-        original_size (tuple): The original size of the image.
-    Returns:
-        tuple: A tuple containing the segmented image and
-        the intersection over union (IoU) score.
-    """
-    box_torch = torch.as_tensor(
-        box_256[None, None, ...], dtype=torch.float, device=img_embed.device
-    )
-
-    sparse_embeddings, dense_embeddings = medsam_model.prompt_encoder(
-        points=None,
-        boxes=box_torch,
-        masks=None,
-    )
-    low_res_logits, iou = medsam_model.mask_decoder(
-        image_embeddings=img_embed,  # (B, 256, 64, 64)
-        image_pe=medsam_model.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
-        sparse_prompt_embeddings=sparse_embeddings,  # (B, 2, 256)
-        dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
-        multimask_output=False,
-    )
-
-    low_res_pred = medsam_model.postprocess_masks(
-        low_res_logits, new_size, original_size
-    )
-    low_res_pred = torch.sigmoid(low_res_pred)
-    low_res_pred = low_res_pred.squeeze().cpu().numpy()
-    medsam_seg = (low_res_pred > 0.5).astype(np.uint8)
-
-    return medsam_seg, iou
 
 
 def show_mask(mask, ax, mask_color=None, alpha=0.5):
@@ -157,58 +117,32 @@ def get_attns(module, prefix=''):
 
 
 def MedSAM_infer_npz_2D(
-    img_npz_file,
-    pred_save_dir,
-    medsam_lite_model,
-    device,
+    img_npz_file: str,
+    pred_save_dir: str,
+    medsam_lite_model: MedSAM_Lite,
+    device: torch.device,
     attention=False,
     png_save_dir=None,
 ):
     npz_name = os.path.basename(img_npz_file)
     npz_data = np.load(img_npz_file, 'r', allow_pickle=True)  # (H, W, 3)
     img_3c = npz_data['imgs']  # (H, W, 3)
-
-    if len(img_3c.shape) < 3:
-        # Need to create a 3D image
-        # stack along the last axis
-        img_3c = np.stack([img_3c] * 3, axis=-1)
-    assert (
-        np.max(img_3c) < 256
-    ), f'input data should be in range [0, 255], but got {np.unique(img_3c)}'  # noqa
-    H, W, _ = img_3c.shape
     boxes = npz_data['boxes']
-    segs = np.zeros((H, W), dtype=np.uint8)
-
-    # preprocessing
-    # This comes from the tutorial and seems to yield better results
-    # for the bounding box resize
+    H, W = img_3c.shape[:2]
     target_size = 256
-    img_256 = transform.resize(
-        img_3c,
-        (target_size, target_size),
-        order=3,
-        preserve_range=True,
-        anti_aliasing=True,
-    ).astype(np.uint8)
-
-    newh, neww, _ = img_256.shape
-    img_256_norm = (img_256 - img_256.min()) / np.clip(
-        img_256.max() - img_256.min(), a_min=1e-8, a_max=None
-    )
-    img_256_tensor = (
-        torch.tensor(img_256_norm).float().permute(2, 0, 1).unsqueeze(0).to(device)
-    )
+    segs = np.zeros((H, W), dtype=np.uint8)
+    
+    img_256_tensor = medsam_lite_model.preprocess_2d_img(img_3c, target_size).to(device)
+    newh, neww = img_256_tensor.shape[-2:]
+    
     attns = {}
-    with torch.no_grad():
-        image_embedding = medsam_lite_model.image_encoder(img_256_tensor)
-        attns.update(get_attns(medsam_lite_model.image_encoder))
 
     for idx, box in enumerate(boxes, start=1):
         box256 = box / np.array([W, H, W, H]) * target_size
         box256 = box256[None, ...]  # (1, 4)
-        medsam_mask, iou_pred = medsam_inference(
-            medsam_lite_model, image_embedding, box256, (newh, neww), (H, W)
-        )
+        medsam_mask, iou_pred = medsam_lite_model(img_256_tensor, box256, (newh, neww), (H, W))
+        medsam_mask = (medsam_mask > 0.5).squeeze().numpy().astype(np.uint8)
+        attns.update(get_attns(medsam_lite_model.image_encoder))
         attns.update(get_attns(medsam_lite_model.mask_decoder, prefix=f'box{idx}_'))
         segs[medsam_mask > 0] = idx
         # print(f'{npz_name}, box: {box},
@@ -304,7 +238,7 @@ def build_validation_data_from_train() -> None:
     selecting 5-10% of the training cases.
     """
     files = []
-    for modality in tqdm.tqdm(MODALITIES):
+    for modality in tqdm(MODALITIES):
         # Load in data from modality
         path = os.path.join(TRAIN_DATA_PATH, f'{modality}/*/*')
 
@@ -407,68 +341,12 @@ def run_inference(
 
     # Device will be cpu
     device = torch.device('cpu')
-
-    # Set up the image MedSAM image encoder
-    medsam_lite_image_encoder = TinyViT(
-        img_size=256,
-        in_chans=3,
-        embed_dims=[
-            64,  # (64, 256, 256)
-            128,  # (128, 128, 128)
-            160,  # (160, 64, 64)
-            320,  # (320, 64, 64)
-        ],
-        depths=[2, 2, 6, 2],
-        num_heads=[2, 4, 5, 10],
-        window_sizes=[7, 7, 14, 7],
-        mlp_ratio=4.0,
-        drop_rate=0.0,
-        drop_path_rate=0.0,
-        use_checkpoint=False,
-        mbconv_expand_ratio=4.0,
-        local_conv_size=3,
-        layer_lr_decay=0.8,
-    )
-
-    # Set up the prompt encoder
-    medsam_lite_prompt_encoder = PromptEncoder(
-        embed_dim=256,
-        image_embedding_size=(64, 64),
-        input_image_size=(256, 256),
-        mask_in_chans=16,
-    )
-
-    # Set up the mask encoder
-    medsam_lite_mask_decoder = MaskDecoder(
-        num_multimask_outputs=3,
-        transformer=TwoWayTransformer(
-            depth=2,
-            embedding_dim=256,
-            mlp_dim=2048,
-            num_heads=8,
-        ),
-        transformer_dim=256,
-        iou_head_depth=3,
-        iou_head_hidden_dim=256,
-    )
-
-    medsam_lite_model = MedSAM_Lite(
-        image_encoder=medsam_lite_image_encoder,
-        mask_decoder=medsam_lite_mask_decoder,
-        prompt_encoder=medsam_lite_prompt_encoder,
-    )
-
-    # For this code the model path will be fixed
-    lite_medsam_checkpoint = torch.load(
-        lite_medsam_checkpoint_path,
-        map_location='cpu',
-    )
-    medsam_lite_model.load_state_dict(lite_medsam_checkpoint)
+    medsam_lite_model = MedSAM_Lite.from_medsam_lite(lite_medsam_checkpoint_path)
     medsam_lite_model.to(device)
     medsam_lite_model.eval()
 
     # Iterate over the saved data
-    validation_files = glob.glob(os.path.join(input_dir, '*.npz'), recursive=True)
+    validation_files = glob.glob(os.path.join(input_dir, '2D*.npz'), recursive=True)
     if samples > 0:
         r = np.random.default_rng(0)
         validation_files = r.choice(validation_files, samples, replace=False)
@@ -479,7 +357,7 @@ def run_inference(
 
     # Run the inference for all validation data
     exceptions_list: List[str] = []
-    pbar = tqdm.tqdm(validation_files)
+    pbar = tqdm(validation_files)
     for img_npz_file in pbar:
         start_time = time()
         try:
@@ -493,7 +371,7 @@ def run_inference(
             )
 
         except Exception as e:
-            pbar.write(f'Error in file {img_npz_file}: {e}')
+            pbar.write(f'Error in file {img_npz_file}: e\n{traceback.format_exc()}')
             exceptions_list.append(img_npz_file)
 
         end_time = time()
@@ -509,6 +387,72 @@ def run_inference(
 
     print('Inference completed! ✅')
 
+@cli.command('create-attention-maps')
+@click.option('-i', '--segs_dir', type=str, help='Root directory of the npz segmentation masks')
+@click.option('-d', '--data_dir', type=str, help='Root directory of the npz images')
+@click.option('-o', '--output_dir', type=str, help='Directory to save the visualizations')
+def create_attention_maps(segs_dir, data_dir, output_dir):
+    """
+    Create attention overlays from run-inference npz files
+    """
+    files = glob.glob(os.path.join(data_dir, '*.npz'))
+    os.makedirs(output_dir, exist_ok=True)
+    colors = [
+        (0x00, 0x64, 0x00),   # darkgreen
+        (0x00, 0x00, 0xff),   # red
+        (0x00, 0xd7, 0xff),   # gold
+        (0x85, 0x15, 0xc7),   # mediumvioletred
+        (0x00, 0xff, 0x00),   # lime
+        (0xff, 0xff, 0x00),   # aqua
+        (0xff, 0x00, 0x00),   # blue
+        (0xff, 0x90, 0x1e)    # dodgerblue
+    ]
+    query_order = [
+        'layer0_topleft',
+        'layer0_bottomright',
+        'layer1_topleft',
+        'layer1_bottomright',
+        'layer2_topleft',
+        'layer2_bottomright',
+    ]
+    pbar = tqdm(files)
+    for file in pbar:
+        pbar.set_description(f'Processing {file}')
+        img = np.load(file, 'r', allow_pickle=True)
+        segs_file = os.path.join(segs_dir, os.path.basename(file))
+        segs = np.load(segs_file, 'r', allow_pickle=True)
+        masks = segs['segs']
+        n_boxes = set([int(k.split('_')[0][3:]) for k in segs.keys() if 'box' in k])
+        subpbar = tqdm(n_boxes)
+        for b in subpbar:
+            mask = masks[b]
+            contour = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            s = []
+            for k in filter(lambda x: 'attn_token_to_image' in x and f'box{b}_' in x, segs.keys()):
+                s.append(segs[k][:,:,-2:,:])
+            if not s:
+                break
+            s = np.concatenate(s, axis=2) # (B, H, Q, K)
+            B, H, Q, K = s.shape
+            W = int(K ** 0.5)
+            assert Q == len(query_order), f'Weird number of queries: {Q} for {file}'
+            assert H == len(colors), f'Weird number of heads: {H} for {file}'
+            attn = s.squeeze().reshape(H, Q, W, W)
+            for i in range(Q):
+                canvas = img['imgs'].copy()
+                head_masks = []
+                for j in range(H):
+                    mask = attn[j, i, :, :]
+                    mask = (mask * 255 / mask.max()).astype(np.uint8)
+                    mask = cv2.resize(mask, tuple(img['imgs'].shape[:2][::-1]))
+                    heatmap = (mask[..., None] / 255) * (np.array(colors[j])[None, None, :] / 255)
+                    head_masks.append(heatmap)
+                head_masks = np.stack(head_masks).max(axis=0) * 255
+                canvas = cv2.addWeighted(canvas, 0.5, head_masks.astype(np.uint8), 0.5, 0)
+                canvas = cv2.drawContours(canvas, contour[0], -1, (255, 255, 0), 2)
+                file_to_save = os.path.join(output_dir, f'{os.path.basename(file).split(".")[0]}_box{b}_{query_order[i]}.png')
+                cv2.imwrite(file_to_save, canvas)
+
 
 def compute_metrics(save_version: str = 'v1') -> None:
     """
@@ -521,7 +465,7 @@ def compute_metrics(save_version: str = 'v1') -> None:
         validation_file_names.append(file)
 
     metrics = []
-    for name in tqdm.tqdm(validation_file_names):
+    for name in tqdm(validation_file_names):
         img_npz_file = os.path.join(VALIDATION_DATA_PATH, name)
         pred_path = os.path.join(PRED_SAVE_DIR, name)
         modality_type = name.split('_')[0]
