@@ -19,6 +19,7 @@ from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransfor
 from segment_anything.modeling.transformer import Attention as SamAttention
 from skimage import transform
 from torchvision.ops import masks_to_boxes
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # first party
 from tiny_vit_sam import Attention as ViTAttention
@@ -446,25 +447,18 @@ def visualize_attention(
         canvas = cv2.rectangle(canvas, (box[0], box[1]), (box[2], box[3]), (255, 128, 200), thickness)
     if gt is not None:
         assert gt.shape == (H, W), f'Ground truth mask shape mismatch: {gt.shape} vs {(H, W)}'
+        gt = gt.astype(np.uint8)
         contour = cv2.findContours(gt, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         canvas = cv2.drawContours(canvas, contour[0], -1, (255, 255, 0), thickness)
     if segments is not None:
         assert segments.shape == (H, W), f'Segmentation mask shape mismatch: {segments.shape} vs {(H, W)}'
+        segments = segments.astype(np.uint8)
         contour = cv2.findContours(segments, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         canvas = cv2.drawContours(canvas, contour[0], -1, (0, 255, 255), thickness)
     canvas = cv2.addWeighted(canvas, 0.5, head_masks.astype(np.uint8), 0.5, 0)
     return canvas
 
-@cli.command('create-attention-maps')
-@click.option('-i', '--segs_dir', type=str, help='Root directory of the npz segmentation masks')
-@click.option('-d', '--data_dir', type=str, help='Root directory of the npz images')
-@click.option('-o', '--output_dir', type=str, help='Directory to save the visualizations')
-def create_attention_maps(segs_dir, data_dir, output_dir):
-    """
-    Create attention overlays from run-inference npz files
-    """
-    files = glob.glob(os.path.join(data_dir, '*.npz'))
-    os.makedirs(output_dir, exist_ok=True)
+def create_attention_maps_from_file(file: str, segs_dir: str, output_dir: str):
     query_order = [
         'layer0_topleft',
         'layer0_bottomright',
@@ -473,35 +467,63 @@ def create_attention_maps(segs_dir, data_dir, output_dir):
         'layer2_topleft',
         'layer2_bottomright',
     ]
-    pbar = tqdm(files)
-    for file in pbar:
-        pbar.set_description(f'Processing {file}')
-        img = np.load(file, 'r', allow_pickle=True)
-        segs_file = os.path.join(segs_dir, os.path.basename(file))
-        segs = np.load(segs_file, 'r', allow_pickle=True)
-        masks = segs['segs']
-        n_boxes = set([int(k.split('_')[0][3:]) for k in segs.keys() if 'box' in k])
-        subpbar = tqdm(n_boxes)
-        for b in subpbar:
-            segment = (masks == b).astype(np.uint8)
-            print(list(img.keys()))
-            gt = img['gts'] == b if 'gts' in img else None
-            box = img['boxes'][b-1] if 'boxes' in img else None
-            s = []
-            for k in filter(lambda x: 'attn_token_to_image' in x and f'box{b}_' in x, segs.keys()):
-                s.append(segs[k][:,:,-2:,:])
-            if not s:
-                break
-            s = np.concatenate(s, axis=2) # (B, H, Q, K)
-            B, H, Q, K = s.shape
-            W = int(K ** 0.5)
-            assert Q == len(query_order), f'Weird number of queries: {Q} for {file}'
-            assert H == 8, f'Weird number of heads: {H} for {file}'
-            attn = s.reshape(H, Q, W, W)
-            for i in range(Q):
-                canvas = visualize_attention(img['imgs'], attn[:, i, :, :], box, gt, segment)
-                file_to_save = os.path.join(output_dir, f'{os.path.basename(file).split(".")[0]}_box{b}_{query_order[i]}.png')
-                cv2.imwrite(file_to_save, canvas)
+    img = np.load(file, 'r', allow_pickle=True)
+    segs_file = os.path.join(segs_dir, os.path.basename(file))
+    segs = np.load(segs_file, 'r', allow_pickle=True)
+    masks = segs['segs']
+    boxes = set([int(k.split('_')[0][3:]) for k in segs.keys() if 'box' in k])
+    # Weird temporary hack for a bug in our validation data... this may impact metrics, dunno
+    index_shift_bug = 'gts' in img and (img['gts'] == 1).sum() == 0
+    for b in boxes:
+        segment = (masks == b).astype(np.uint8)
+        gt = img['gts'] == (b + (1 if index_shift_bug else 0)) if 'gts' in img else None
+        box = img['boxes'][b-1] if 'boxes' in img else None
+        s = []
+        for k in filter(lambda x: 'attn_token_to_image' in x and f'box{b}_' in x, segs.keys()):
+            s.append(segs[k][:,:,-2:,:])
+        if not s:
+            break
+        s = np.concatenate(s, axis=2) # (B, H, Q, K)
+        B, H, Q, K = s.shape
+        W = int(K ** 0.5)
+        assert Q == len(query_order), f'Weird number of queries: {Q} for {file}'
+        assert H == 8, f'Weird number of heads: {H} for {file}'
+        attn = s.reshape(H, Q, W, W)
+        for i in range(Q):
+            canvas = visualize_attention(img['imgs'], attn[:, i, :, :], box, gt, segment)
+            file_to_save = os.path.join(output_dir, f'{os.path.basename(file).split(".")[0]}_box{b}_{query_order[i]}.png')
+            cv2.imwrite(file_to_save, canvas)
+
+@cli.command('create-attention-maps')
+@click.option('-i', '--segs_dir', type=str, help='Root directory of the npz segmentation masks')
+@click.option('-d', '--data_dir', type=str, help='Root directory of the npz images')
+@click.option('-o', '--output_dir', type=str, help='Directory to save the visualizations')
+@click.option('-n', '--num_workers', type=int, default=None, help='Number of workers to use')
+@click.option('--rank', type=int, default=0, help='Rank of the worker')
+@click.option('--world_size', type=int, default=1, help='Number of workers')
+@click.option('--limit', type=int, default=None, help='Limit the number of files to process')
+def create_attention_maps(segs_dir, data_dir, output_dir, num_workers, rank, world_size, limit):
+    """
+    Create attention overlays from run-inference npz files
+    """
+    np.random.seed(2024)
+    files = glob.glob(os.path.join(data_dir, '*.npz'))
+    np.random.shuffle(files)
+    if limit:
+        files = files[:limit]
+    files = files[num_workers * rank::world_size]
+    os.makedirs(output_dir, exist_ok=True)
+    if num_workers == 0:
+        for file in tqdm(files, desc='Processing files'):
+            create_attention_maps_from_file(file, segs_dir, output_dir)
+    else:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(create_attention_maps_from_file, file, segs_dir, output_dir) for file in files]
+            for future in tqdm(as_completed(futures), total=len(files), desc='Processing files'):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Error processing file: {e}", traceback.format_exc())
 
 def compute_metrics(save_version: str = 'v1') -> None:
     """

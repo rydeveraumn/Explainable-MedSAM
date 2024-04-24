@@ -7,6 +7,8 @@ from typing import List
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+from skimage import transform
+import torch
 
 
 def extract_attention_layers(data: np.lib.npyio.NpzFile) -> List[np.ndarray]:
@@ -203,3 +205,19 @@ def resize_box_to_256(box, original_size):
         new_box[i] = int(box[i] * ratio)
 
     return new_box
+
+def preprocess_2d_img(img: np.ndarray, target_size: int = 256) -> torch.Tensor:
+    if len(img.shape) < 3:
+        # Need to create a 3D image
+        # stack along the last axis
+        img = np.stack([img] * 3, axis=-1)
+    assert np.max(img) < 256, f'input data should be in range [0, 255], but got {np.unique(img)}'
+    
+    # preprocessing
+    # This comes from the tutorial and seems to yield better results
+    # for the bounding box resize
+    img = transform.resize(img, (target_size, target_size), order=3, preserve_range=True, anti_aliasing=True)
+    img = img.astype(np.uint8)
+    img = (img - img.min()) / np.clip(img.max() - img.min(), a_min=1e-8, a_max=None)
+    img_t = torch.tensor(img).float().permute(2, 0, 1).unsqueeze(0)
+    return img_t

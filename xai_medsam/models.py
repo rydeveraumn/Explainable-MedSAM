@@ -9,7 +9,8 @@ from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransfor
 
 # first party
 from tiny_vit_sam import TinyViT
-from skimage import transform
+
+from .utils import preprocess_2d_img
 
 
 class MedSAM_Lite(nn.Module):
@@ -24,7 +25,8 @@ class MedSAM_Lite(nn.Module):
                 box: Union[torch.Tensor, np.ndarray],
                 new_size: Tuple[int, int],
                 original_size: Tuple[int, int],
-                raw_predictions = False) -> Tuple[torch.Tensor, torch.Tensor]:
+                raw_predictions = False,
+                **kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
         image_embedding = self.image_encoder(image)  # (B, 256, 64, 64)
 
         # do not compute gradients for prompt encoder
@@ -88,21 +90,9 @@ class MedSAM_Lite(nn.Module):
 
         return masks
     
-    def preprocess_2d_img(self, img: np.ndarray, target_size: int = 256) -> torch.Tensor:
-        if len(img.shape) < 3:
-            # Need to create a 3D image
-            # stack along the last axis
-            img = np.stack([img] * 3, axis=-1)
-        assert np.max(img) < 256, f'input data should be in range [0, 255], but got {np.unique(img)}'
-        
-        # preprocessing
-        # This comes from the tutorial and seems to yield better results
-        # for the bounding box resize
-        img = transform.resize(img, (target_size, target_size), order=3, preserve_range=True, anti_aliasing=True)
-        img = img.astype(np.uint8)
-        img = (img - img.min()) / np.clip(img.max() - img.min(), a_min=1e-8, a_max=None)
-        img_t = torch.tensor(img).float().permute(2, 0, 1).unsqueeze(0)
-        return img_t
+    @staticmethod
+    def preprocess_2d_img(img: np.ndarray, target_size: int = 256) -> torch.Tensor:
+        return preprocess_2d_img(img, target_size)
     
     @classmethod
     def from_medsam_lite(cls, checkpoint):

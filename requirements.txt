@@ -24,4 +24,5 @@ tqdm==4.66.1
 wandb==0.15.9
 timm==0.9.12
 click
+patchify
 MedSAM @ git+https://github.com/bowang-lab/MedSAM@main
