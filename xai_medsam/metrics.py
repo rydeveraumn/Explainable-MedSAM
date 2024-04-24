@@ -799,6 +799,9 @@ def compute_dice_coefficient(mask_gt, mask_pred):
 
 
 def compute_multi_class_dsc(gt, seg):
+    """
+    Compute multi class dice
+    """
     dsc = []
     for i in range(1, gt.max() + 1):
         gt_i = gt == i

@@ -1,10 +1,12 @@
 # stdlib
 import glob
 import os
+import traceback
 from collections import OrderedDict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from time import time
-from typing import List
+from typing import List, Union
 
 # third party
 import click
@@ -13,20 +15,15 @@ import numpy as np
 import pandas as pd
 import torch
 import wandb
-from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
-from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from segment_anything.modeling.transformer import Attention as SamAttention
-from skimage import transform
 from torchvision.ops import masks_to_boxes
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from tqdm.auto import tqdm
 
 # first party
 from tiny_vit_sam import Attention as ViTAttention
-from tiny_vit_sam import TinyViT
 from xai_medsam.metrics import compute_multi_class_dsc
 from xai_medsam.models import MedSAM_Lite
-import traceback
 
 # Training data path
 TRAIN_DATA_PATH = '/panfs/jay/groups/7/csci5980/senge050/Project/dataset/train_npz'
@@ -132,16 +129,18 @@ def MedSAM_infer_npz_2D(
     H, W = img_3c.shape[:2]
     target_size = 256
     segs = np.zeros((H, W), dtype=np.uint8)
-    
+
     img_256_tensor = medsam_lite_model.preprocess_2d_img(img_3c, target_size).to(device)
     newh, neww = img_256_tensor.shape[-2:]
-    
+
     attns = {}
 
     for idx, box in enumerate(boxes, start=1):
         box256 = box / np.array([W, H, W, H]) * target_size
         box256 = box256[None, ...]  # (1, 4)
-        medsam_mask, iou_pred = medsam_lite_model(img_256_tensor, box256, (newh, neww), (H, W))
+        medsam_mask, iou_pred = medsam_lite_model(
+            img_256_tensor, box256, (newh, neww), (H, W)
+        )
         medsam_mask = (medsam_mask > 0.5).squeeze().numpy().astype(np.uint8)
         attns.update(get_attns(medsam_lite_model.image_encoder))
         attns.update(get_attns(medsam_lite_model.mask_decoder, prefix=f'box{idx}_'))
@@ -371,7 +370,7 @@ def run_inference(
                 png_save_dir=png_save_dir,
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa
             pbar.write(f'Error in file {img_npz_file}: e\n{traceback.format_exc()}')
             exceptions_list.append(img_npz_file)
 
@@ -387,16 +386,18 @@ def run_inference(
     efficiency_df.to_csv(os.path.join(output_dir, 'efficiency.csv'), index=False)
 
     print('Inference completed! ✅')
-    
+
+
 def visualize_attention(
-    img: np.ndarray, 
-    attn: np.ndarray, 
-    box: np.ndarray = None, 
-    gt: np.ndarray = None, 
-    segments: np.ndarray = None) -> np.ndarray:
+    img: np.ndarray,
+    attn: np.ndarray,
+    box: Union[None, np.ndarray] = None,
+    gt: Union[None, np.ndarray] = None,
+    segments: Union[None, np.ndarray] = None,
+) -> np.ndarray:
     """
-    Draws attentions, boxes, and ground truth masks on the image
-    
+    Draws attentions, boxes, and ground truth masks on the image.
+
     Parameters
     ----------
     img : np.ndarray (H, W, 3)/(H, W, 1)/(H, W), dtype=uint8
@@ -409,7 +410,7 @@ def visualize_attention(
         Ground truth masks (0/1)
     segments : np.ndarray (H, W), dtype=uint8
         Segmentation masks (0/1)
-    
+
     Returns
     -------
     np.ndarray (H, W, 3), dtype=uint8
@@ -417,18 +418,18 @@ def visualize_attention(
     """
     canvas = img.copy()
     colors = [
-        (0x00, 0x64, 0x00),   # darkgreen
-        (0x00, 0x00, 0xff),   # red
-        (0x00, 0xd7, 0xff),   # gold
-        (0x85, 0x15, 0xc7),   # mediumvioletred
-        (0x00, 0xff, 0x00),   # lime
-        (0xff, 0xff, 0x00),   # aqua
-        (0xff, 0x00, 0x00),   # blue
-        (0xff, 0x90, 0x1e)    # dodgerblue
+        (0x00, 0x64, 0x00),  # darkgreen
+        (0x00, 0x00, 0xFF),  # red
+        (0x00, 0xD7, 0xFF),  # gold
+        (0x85, 0x15, 0xC7),  # mediumvioletred
+        (0x00, 0xFF, 0x00),  # lime
+        (0xFF, 0xFF, 0x00),  # aqua
+        (0xFF, 0x00, 0x00),  # blue
+        (0xFF, 0x90, 0x1E),  # dodgerblue
     ]
     if len(canvas.shape) == 3:
         canvas = cv2.cvtColor(canvas, cv2.COLOR_RGB2GRAY)
-    canvas = canvas[...,None].repeat(3, axis=-1)
+    canvas = canvas[..., None].repeat(3, axis=-1)
     H, W, _ = canvas.shape
     Hd, Ha, Wa = attn.shape
     head_masks = []
@@ -436,27 +437,36 @@ def visualize_attention(
         mask = attn[i, :, :]
         mask = (mask * 255 / mask.max()).astype(np.uint8)
         mask = cv2.resize(mask, (W, H))
-        heatmap = (mask[..., None] / 255) * (np.array(colors[i])[None, None, :] / 255)
+        heatmap = (mask[..., None] / 255) * (np.array(colors[i])[None, None, :] / 255)  # type: ignore  # noqa
         head_masks.append(heatmap)
     head_masks = np.stack(head_masks).max(axis=0) * 255
-    thickness = max(1, int(W/256))
+    thickness = max(1, int(W / 256))
     if box is not None:
         box = box.reshape(-1)
         assert len(box) == 4, f'Bounding box shape mismatch: {len(box)}'
-        box = tuple(map(int, box))
-        canvas = cv2.rectangle(canvas, (box[0], box[1]), (box[2], box[3]), (255, 128, 200), thickness)
+        box = tuple(map(int, box))  # type: ignore
+        canvas = cv2.rectangle(
+            canvas, (box[0], box[1]), (box[2], box[3]), (255, 128, 200), thickness
+        )
     if gt is not None:
-        assert gt.shape == (H, W), f'Ground truth mask shape mismatch: {gt.shape} vs {(H, W)}'
+        assert gt.shape == (
+            H,
+            W,
+        ), f'Ground truth mask shape mismatch: {gt.shape} vs {(H, W)}'
         gt = gt.astype(np.uint8)
         contour = cv2.findContours(gt, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         canvas = cv2.drawContours(canvas, contour[0], -1, (255, 255, 0), thickness)
     if segments is not None:
-        assert segments.shape == (H, W), f'Segmentation mask shape mismatch: {segments.shape} vs {(H, W)}'
+        assert segments.shape == (
+            H,
+            W,
+        ), f'Segmentation mask shape mismatch: {segments.shape} vs {(H, W)}'
         segments = segments.astype(np.uint8)
         contour = cv2.findContours(segments, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         canvas = cv2.drawContours(canvas, contour[0], -1, (0, 255, 255), thickness)
-    canvas = cv2.addWeighted(canvas, 0.5, head_masks.astype(np.uint8), 0.5, 0)
+    canvas = cv2.addWeighted(canvas, 0.5, head_masks.astype(np.uint8), 0.5, 0)  # type: ignore  # noqa
     return canvas
+
 
 def create_attention_maps_from_file(file: str, segs_dir: str, output_dir: str):
     query_order = [
@@ -472,37 +482,56 @@ def create_attention_maps_from_file(file: str, segs_dir: str, output_dir: str):
     segs = np.load(segs_file, 'r', allow_pickle=True)
     masks = segs['segs']
     boxes = set([int(k.split('_')[0][3:]) for k in segs.keys() if 'box' in k])
-    # Weird temporary hack for a bug in our validation data... this may impact metrics, dunno
+    # Weird temporary hack for a bug in our validation data...
+    # this may impact metrics, dunno
     index_shift_bug = 'gts' in img and (img['gts'] == 1).sum() == 0
     for b in boxes:
         segment = (masks == b).astype(np.uint8)
         gt = img['gts'] == (b + (1 if index_shift_bug else 0)) if 'gts' in img else None
-        box = img['boxes'][b-1] if 'boxes' in img else None
+        box = img['boxes'][b - 1] if 'boxes' in img else None
         s = []
-        for k in filter(lambda x: 'attn_token_to_image' in x and f'box{b}_' in x, segs.keys()):
-            s.append(segs[k][:,:,-2:,:])
+        for k in filter(
+            lambda x: 'attn_token_to_image' in x and f'box{b}_' in x, segs.keys()
+        ):
+            s.append(segs[k][:, :, -2:, :])
         if not s:
             break
-        s = np.concatenate(s, axis=2) # (B, H, Q, K)
-        B, H, Q, K = s.shape
-        W = int(K ** 0.5)
+        s = np.concatenate(s, axis=2)  # (B, H, Q, K)
+        B, H, Q, K = s.shape  # type: ignore
+        W = int(K**0.5)
         assert Q == len(query_order), f'Weird number of queries: {Q} for {file}'
         assert H == 8, f'Weird number of heads: {H} for {file}'
-        attn = s.reshape(H, Q, W, W)
+        attn = s.reshape(H, Q, W, W)  # type: ignore
         for i in range(Q):
-            canvas = visualize_attention(img['imgs'], attn[:, i, :, :], box, gt, segment)
-            file_to_save = os.path.join(output_dir, f'{os.path.basename(file).split(".")[0]}_box{b}_{query_order[i]}.png')
+            canvas = visualize_attention(
+                img['imgs'], attn[:, i, :, :], box, gt, segment
+            )
+            file_to_save = os.path.join(
+                output_dir,
+                f'{os.path.basename(file).split(".")[0]}_box{b}_{query_order[i]}.png',
+            )
             cv2.imwrite(file_to_save, canvas)
 
+
 @cli.command('create-attention-maps')
-@click.option('-i', '--segs_dir', type=str, help='Root directory of the npz segmentation masks')
+@click.option(
+    '-i', '--segs_dir', type=str, help='Root directory of the npz segmentation masks'
+)
 @click.option('-d', '--data_dir', type=str, help='Root directory of the npz images')
-@click.option('-o', '--output_dir', type=str, help='Directory to save the visualizations')
-@click.option('-n', '--num_workers', type=int, default=None, help='Number of workers to use')
+@click.option(
+    '-o', '--output_dir', type=str, help='Directory to save the visualizations'
+)
+@click.option(
+    '-n', '--num_workers', type=int, default=None, help='Number of workers to use'
+)
 @click.option('--rank', type=int, default=0, help='Rank of the worker')
 @click.option('--world_size', type=int, default=1, help='Number of workers')
-@click.option('--limit', type=int, default=None, help='Limit the number of files to process')
-def create_attention_maps(segs_dir, data_dir, output_dir, num_workers, rank, world_size, limit):
+@click.option(
+    '--limit', type=int, default=None, help='Limit the number of files to process'
+)
+def create_attention_maps(
+    segs_dir, data_dir, output_dir, num_workers, rank, world_size, limit
+):
     """
     Create attention overlays from run-inference npz files
     """
@@ -511,19 +540,27 @@ def create_attention_maps(segs_dir, data_dir, output_dir, num_workers, rank, wor
     np.random.shuffle(files)
     if limit:
         files = files[:limit]
-    files = files[num_workers * rank::world_size]
+    files = files[num_workers * rank :: world_size]
     os.makedirs(output_dir, exist_ok=True)
     if num_workers == 0:
         for file in tqdm(files, desc='Processing files'):
             create_attention_maps_from_file(file, segs_dir, output_dir)
     else:
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = [executor.submit(create_attention_maps_from_file, file, segs_dir, output_dir) for file in files]
-            for future in tqdm(as_completed(futures), total=len(files), desc='Processing files'):
+            futures = [
+                executor.submit(
+                    create_attention_maps_from_file, file, segs_dir, output_dir
+                )
+                for file in files
+            ]
+            for future in tqdm(
+                as_completed(futures), total=len(files), desc='Processing files'
+            ):
                 try:
                     future.result()
                 except Exception as e:
                     print(f"Error processing file: {e}", traceback.format_exc())
+
 
 def compute_metrics(save_version: str = 'v1') -> None:
     """

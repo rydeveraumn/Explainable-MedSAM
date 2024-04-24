@@ -1,10 +1,11 @@
-# third party
+# stdlib
 from typing import Tuple, Union
+
+# third party
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 
 # first party
@@ -14,19 +15,25 @@ from .utils import preprocess_2d_img
 
 
 class MedSAM_Lite(nn.Module):
+    """
+    MedSAM Lite Model
+    """
+
     def __init__(self, image_encoder, mask_decoder, prompt_encoder):
         super().__init__()
         self.image_encoder = image_encoder
         self.mask_decoder = mask_decoder
         self.prompt_encoder = prompt_encoder
 
-    def forward(self,
-                image: torch.Tensor,
-                box: Union[torch.Tensor, np.ndarray],
-                new_size: Tuple[int, int],
-                original_size: Tuple[int, int],
-                raw_predictions = False,
-                **kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self,
+        image: torch.Tensor,
+        box: Union[torch.Tensor, np.ndarray],
+        new_size: Tuple[int, int],
+        original_size: Tuple[int, int],
+        raw_predictions=False,
+        **kwargs
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         image_embedding = self.image_encoder(image)  # (B, 256, 64, 64)
 
         # do not compute gradients for prompt encoder
@@ -41,7 +48,7 @@ class MedSAM_Lite(nn.Module):
                 boxes=box,
                 masks=None,
             )
-        
+
         low_res_logits, iou = self.mask_decoder(
             image_embeddings=image_embedding,  # (B, 256, 64, 64)
             image_pe=self.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
@@ -49,13 +56,11 @@ class MedSAM_Lite(nn.Module):
             dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
             multimask_output=False,
         )  # (B, 1, 256, 256)
-        
+
         if raw_predictions:
             return low_res_logits
 
-        low_res_pred = self.postprocess_masks(
-            low_res_logits, new_size, original_size
-        )
+        low_res_pred = self.postprocess_masks(low_res_logits, new_size, original_size)
         low_res_pred = torch.sigmoid(low_res_pred)
         return low_res_pred, iou
 
@@ -89,11 +94,11 @@ class MedSAM_Lite(nn.Module):
         )
 
         return masks
-    
+
     @staticmethod
     def preprocess_2d_img(img: np.ndarray, target_size: int = 256) -> torch.Tensor:
         return preprocess_2d_img(img, target_size)
-    
+
     @classmethod
     def from_medsam_lite(cls, checkpoint):
         medsam_lite_image_encoder = TinyViT(
